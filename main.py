@@ -1,503 +1,322 @@
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import sqlite3
-import datetime
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.enums import ParseMode
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+from dotenv import load_dotenv
 import asyncio
 
+# Загрузка переменных окружения
+load_dotenv()
+
 # Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получаем настройки из переменных окружения
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-CHANNEL_ID = os.getenv('CHANNEL_ID', '@cosinxx_prime')
-ADMIN_IDS = [7433757951]
+# Получение токена
+BOT_TOKEN = os.getenv("8597427970:AAEU-5N1gWJe6Dow1AA6NPS82cGbHP0w5a4")
+ADMIN_GROUP_ID = os.getenv("-1003408636061")
+PUBLIC_CHANNEL_ID = os.getenv("-5093355709")
+ADMIN_ID = os.getenv("7433757951")  # ID главного админа
 
 if not BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN не установлен!")
-    exit(1)
+    raise ValueError("BOT_TOKEN не установлен!")
 
-# База данных
-class ContestDB:
-    def __init__(self):
-        self.conn = sqlite3.connect('contests.db', check_same_thread=False)
-        self.create_tables()
+# Инициализация
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 
-    def create_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS contests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                channel_message_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                end_time TIMESTAMP,
-                is_active BOOLEAN DEFAULT TRUE,
-                winners_count INTEGER DEFAULT 1
+# Хранение данных
+teams_data = {}
+team_counter = 0
+MAX_TEAMS = 0  # Будет установлено админом
+registration_active = False
+
+# Состояния
+class TeamRegistration(StatesGroup):
+    waiting_for_team_name = State()
+    waiting_for_team_avatar = State()
+    waiting_for_players = State()
+
+class AdminSetLimit(StatesGroup):
+    waiting_for_limit = State()
+
+# ================== КОМАНДЫ ДЛЯ АДМИНА ==================
+
+# Установка лимита команд (только админ)
+@dp.message(Command("setlimit"))
+async def cmd_setlimit(message: Message, state: FSMContext):
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("❌ Только администратор может устанавливать лимит.")
+        return
+    
+    await state.set_state(AdminSetLimit.waiting_for_limit)
+    await message.answer("Введите количество команд для регистрации (1-20):")
+
+# Обработка лимита от админа
+@dp.message(AdminSetLimit.waiting_for_limit)
+async def process_limit(message: Message, state: FSMContext):
+    global MAX_TEAMS, registration_active, team_counter, teams_data
+    
+    try:
+        limit = int(message.text.strip())
+        if 1 <= limit <= 20:
+            MAX_TEAMS = limit
+            registration_active = True
+            team_counter = 0
+            teams_data = {}
+            
+            await message.answer(
+                f"✅ Лимит установлен: {MAX_TEAMS} команд\n"
+                f"Регистрация открыта! Отправьте команду /register для участия."
             )
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS participants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                contest_id INTEGER,
-                user_id INTEGER,
-                username TEXT,
-                full_name TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (contest_id) REFERENCES contests (id)
-            )
-        ''')
-        self.conn.commit()
+            
+            # Уведомление в канал
+            if PUBLIC_CHANNEL_ID:
+                await bot.send_message(
+                    chat_id=PUBLIC_CHANNEL_ID,
+                    text=f"🎮 Регистрация команд открыта!\nМаксимум команд: {MAX_TEAMS}\n\nИспользуйте /register для участия."
+                )
+        else:
+            await message.answer("Введите число от 1 до 20:")
+            return
+    except ValueError:
+        await message.answer("Введите число от 1 до 20:")
+        return
+    
+    await state.clear()
 
-    def add_contest(self, name, description, end_time, winners_count=1, channel_message_id=None):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            INSERT INTO contests (name, description, end_time, winners_count, channel_message_id)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (name, description, end_time, winners_count, channel_message_id))
-        self.conn.commit()
-        return cursor.lastrowid
-
-    def get_active_contests(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT * FROM contests 
-            WHERE is_active = TRUE AND end_time > datetime('now')
-        ''')
-        return cursor.fetchall()
-
-    def get_contest(self, contest_id):
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM contests WHERE id = ?', (contest_id,))
-        return cursor.fetchone()
-
-    def end_contest(self, contest_id):
-        cursor = self.conn.cursor()
-        cursor.execute('UPDATE contests SET is_active = FALSE WHERE id = ?', (contest_id,))
-        self.conn.commit()
-
-    def add_participant(self, contest_id, user_id, username, full_name):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT id FROM participants 
-            WHERE contest_id = ? AND user_id = ?
-        ''', (contest_id, user_id))
-        if cursor.fetchone() is None:
-            cursor.execute('''
-                INSERT INTO participants (contest_id, user_id, username, full_name)
-                VALUES (?, ?, ?, ?)
-            ''', (contest_id, user_id, username, full_name))
-            self.conn.commit()
-            return True
-        return False
-
-    def get_participants_count(self, contest_id):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT COUNT(*) FROM participants WHERE contest_id = ?
-        ''', (contest_id,))
-        return cursor.fetchone()[0]
-
-    def get_random_winners(self, contest_id, count):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            SELECT * FROM participants 
-            WHERE contest_id = ? 
-            ORDER BY RANDOM() 
-            LIMIT ?
-        ''', (contest_id, count))
-        return cursor.fetchall()
-
-db = ContestDB()
-
-class ContestBot:
-    def __init__(self, token: str):
-        self.application = Application.builder().token(token).build()
-        self.setup_handlers()
-        self.channel_id = CHANNEL_ID
-
-    def setup_handlers(self):
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("help", self.help))
-        self.application.add_handler(CommandHandler("admin", self.admin_panel))
-        self.application.add_handler(CommandHandler("create", self.create_contest))
-        self.application.add_handler(CommandHandler("contests", self.show_active_contests))
-        self.application.add_handler(CallbackQueryHandler(self.button_handler))
-
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        
-        if context.args and context.args[0].startswith('participate'):
-            try:
-                contest_id = int(context.args[0].split('_')[1]) if '_' in context.args[0] else None
-                if contest_id:
-                    await self.handle_participation_start(update, context, contest_id, user)
-                    return
-            except (ValueError, IndexError):
-                pass
-        
-        await update.message.reply_text(
-            f"Привет, {user.first_name}! 👋\n\n"
-            "Я бот для проведения конкурсов в канале.\n"
-            "Для участия в конкурсе нажмите кнопку 'Участвовать' под постом с конкурсом в канале."
+# Закрытие регистрации (админ)
+@dp.message(Command("closereg"))
+async def cmd_closereg(message: Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("❌ Только администратор может закрывать регистрацию.")
+        return
+    
+    global registration_active
+    registration_active = False
+    
+    await message.answer("✅ Регистрация закрыта.")
+    
+    if PUBLIC_CHANNEL_ID:
+        await bot.send_message(
+            chat_id=PUBLIC_CHANNEL_ID,
+            text="⛔ Регистрация команд закрыта."
         )
 
-    async def handle_participation_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE, contest_id: int, user):
-        contest = db.get_contest(contest_id)
-        if not contest:
-            await update.message.reply_text("❌ Конкурс не найден!")
-            return
+# Статус регистрации (админ)
+@dp.message(Command("status"))
+async def cmd_status(message: Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        await message.answer("❌ Только администратор может просматривать статус.")
+        return
+    
+    status_text = (
+        f"📊 Статус регистрации:\n"
+        f"• Лимит команд: {MAX_TEAMS}\n"
+        f"• Зарегистрировано: {team_counter}\n"
+        f"• Свободных мест: {MAX_TEAMS - team_counter}\n"
+        f"• Регистрация: {'✅ Открыта' if registration_active else '❌ Закрыта'}\n\n"
+    )
+    
+    if teams_data:
+        status_text += "Зарегистрированные команды:\n"
+        for num, team in teams_data.items():
+            status_text += f"#{num}: {team['name']} ({len(team['players'])} игроков)\n"
+    
+    await message.answer(status_text)
 
-        if not contest[6]:
-            await update.message.reply_text("❌ Этот конкурс уже завершен!")
-            return
+# ================== КОМАНДЫ ДЛЯ ВСЕХ ==================
 
-        if db.add_participant(contest_id, user.id, user.username, user.full_name):
-            participants_count = db.get_participants_count(contest_id)
-            await self.update_contest_message(contest_id)
-            
-            end_time = datetime.datetime.fromisoformat(contest[5])
-            time_left = end_time - datetime.datetime.now()
-            hours_left = max(0, int(time_left.total_seconds() // 3600))
-            minutes_left = max(0, int((time_left.total_seconds() % 3600) // 60))
-            
-            await update.message.reply_text(
-                f"✅ {user.first_name}, вы участвуете в конкурсе!\n\n"
-                f"🎯 **{contest[1]}**\n"
-                f"👥 Участников: {participants_count}\n"
-                f"⏰ Завершится через: {hours_left}ч {minutes_left}м"
-            )
-        else:
-            await update.message.reply_text(f"ℹ️ Вы уже участвуете в этом конкурсе!")
+# Старт
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    if not registration_active:
+        await message.answer("⏳ Регистрация команд пока не открыта. Ожидайте объявления.")
+        return
+    
+    await message.answer(
+        "👋 Добро пожаловать!\n\n"
+        f"Регистрация команд открыта! Осталось мест: {MAX_TEAMS - team_counter}\n"
+        "Для регистрации команды используйте /register"
+    )
 
-    async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not await self.is_admin(user):
-            await update.message.reply_text("❌ Нет прав администратора!")
-            return
+# Регистрация команды
+@dp.message(Command("register"))
+async def cmd_register(message: Message, state: FSMContext):
+    # Проверка активности регистрации
+    if not registration_active:
+        await message.answer("❌ Регистрация закрыта.")
+        return
+    
+    # Проверка лимита
+    if team_counter >= MAX_TEAMS:
+        await message.answer("❌ Все места заняты! Регистрация завершена.")
+        return
+    
+    # Только личные сообщения
+    if message.chat.type != "private":
+        await message.answer("⚠️ Регистрация только в личных сообщениях.")
+        return
+    
+    await state.set_state(TeamRegistration.waiting_for_team_name)
+    await message.answer("📝 Введите название команды:")
 
-        keyboard = [
-            [InlineKeyboardButton("🎯 Создать конкурс", callback_data="create_contest_menu")],
-            [InlineKeyboardButton("📊 Активные конкурсы", callback_data="active_contests")],
-            [InlineKeyboardButton("⏰ Конкурс (1 час)", callback_data="quick_1h")],
-            [InlineKeyboardButton("⏰ Конкурс (3 часа)", callback_data="quick_3h")],
-            [InlineKeyboardButton("⏰ Конкурс (6 часов)", callback_data="quick_6h")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+# Название команды
+@dp.message(TeamRegistration.waiting_for_team_name)
+async def process_team_name(message: Message, state: FSMContext):
+    team_name = message.text.strip()[:50]
+    await state.update_data(team_name=team_name)
+    await state.set_state(TeamRegistration.waiting_for_team_avatar)
+    await message.answer(f"✅ Название: {team_name}\n\n📸 Отправьте аватарку команды (фото):")
 
-        await update.message.reply_text("👨‍💻 Панель администратора:", reply_markup=reply_markup)
+# Аватарка
+@dp.message(TeamRegistration.waiting_for_team_avatar, F.photo)
+async def process_team_avatar(message: Message, state: FSMContext):
+    photo = message.photo[-1]
+    await state.update_data(avatar_file_id=photo.file_id)
+    await state.set_state(TeamRegistration.waiting_for_players)
+    await message.answer(
+        "✅ Аватарка принята!\n\n"
+        "👥 Введите данные игроков:\n"
+        "<code>ID_игрока1 Ник1\nID_игрока2 Ник2</code>\n\n"
+        "Пример:\n<code>123456789 PlayerOne\n987654321 PlayerTwo</code>"
+    )
 
-    async def create_contest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not await self.is_admin(user):
-            await update.message.reply_text("❌ Нет прав администратора!")
-            return
+# Неправильная аватарка
+@dp.message(TeamRegistration.waiting_for_team_avatar)
+async def wrong_avatar(message: Message):
+    await message.answer("❌ Отправьте фото (аватарку команды).")
 
-        if context.args:
-            try:
-                contest_data = ' '.join(context.args)
-                parts = contest_data.split('|')
-                
-                if len(parts) < 4:
-                    await update.message.reply_text("❌ Формат: /create Название|Описание|Часы|Победители")
-                    return
-
-                name = parts[0].strip()
-                description = parts[1].strip()
-                hours = int(parts[2].strip())
-                winners_count = int(parts[3].strip())
-
-                end_time = datetime.datetime.now() + datetime.timedelta(hours=hours)
-                channel_message_id = await self.create_contest_post(context, name, description, end_time, winners_count)
-                contest_id = db.add_contest(name, description, end_time, winners_count, channel_message_id)
-                self.schedule_contest_end(contest_id, hours)
-                
-                await update.message.reply_text(f"✅ Конкурс создан! ID: {contest_id}")
-
-            except Exception as e:
-                await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-        else:
-            await update.message.reply_text("📝 Формат: /create Название|Описание|Часы|Победители")
-
-    async def create_contest_post(self, context: ContextTypes.DEFAULT_TYPE, name: str, description: str, end_time: datetime.datetime, winners_count: int):
+# Данные игроков
+@dp.message(TeamRegistration.waiting_for_players)
+async def process_players(message: Message, state: FSMContext):
+    global team_counter
+    
+    # Проверяем, не заняты ли уже все места
+    if team_counter >= MAX_TEAMS:
+        await message.answer("❌ К сожалению, все места уже заняты!")
+        await state.clear()
+        return
+    
+    # Парсим игроков
+    players = []
+    for line in message.text.strip().split('\n')[:10]:
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0].isdigit():
+            players.append({
+                'id': parts[0],
+                'nickname': ' '.join(parts[1:])[:50]
+            })
+    
+    if not players:
+        await message.answer("❌ Неверный формат. Введите снова:")
+        return
+    
+    # Получаем сохраненные данные
+    data = await state.get_data()
+    team_name = data.get('team_name')
+    avatar_file_id = data.get('avatar_file_id')
+    
+    # Сохраняем команду
+    team_number = team_counter + 1
+    teams_data[team_number] = {
+        'name': team_name,
+        'avatar': avatar_file_id,
+        'players': players,
+        'captain': message.from_user.username or "N/A"
+    }
+    
+    # Публичное сообщение в канал
+    if PUBLIC_CHANNEL_ID:
         try:
-            bot_username = (await context.bot.get_me()).username
-            keyboard = [
-                [InlineKeyboardButton("🎯 Участвовать", url=f"https://t.me/{bot_username}?start=test")],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            time_left = end_time - datetime.datetime.now()
-            hours_left = int(time_left.total_seconds() // 3600)
-            minutes_left = int((time_left.total_seconds() % 3600) // 60)
-
-            message_text = (
-                f"🎉 **КОНКУРС!** 🎉\n\n"
-                f"**{name}**\n\n"
-                f"{description}\n\n"
-                f"⏰ **Завершится через:** {hours_left}ч {minutes_left}м\n"
-                f"🏆 **Победителей:** {winners_count}\n"
-                f"👥 **Участников:** 0\n\n"
-                f"**Для участия нажмите кнопку:** 👇"
-            )
-
-            message = await context.bot.send_message(
-                chat_id=self.channel_id,
-                text=message_text,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            
-            return message.message_id
-            
-        except Exception as e:
-            logger.error(f"Ошибка при создании поста в канале: {e}")
-            raise e
-
-    async def update_contest_message(self, contest_id: int):
-        try:
-            contest = db.get_contest(contest_id)
-            if not contest or not contest[6]:
-                return
-
-            if not contest[3]:
-                return
-
-            participants_count = db.get_participants_count(contest_id)
-            time_left = datetime.datetime.fromisoformat(contest[5]) - datetime.datetime.now()
-            hours_left = max(0, int(time_left.total_seconds() // 3600))
-            minutes_left = max(0, int((time_left.total_seconds() % 3600) // 60))
-
-            message_text = (
-                f"🎉 **КОНКУРС!** 🎉\n\n"
-                f"**{contest[1]}**\n\n"
-                f"{contest[2]}\n\n"
-                f"⏰ **Конкурс закончится через:** {hours_left}ч {minutes_left}м\n"
-                f"🏆 **Количество победителей:** {contest[7]}\n"
-                f"👥 **Участников:** {participants_count}\n\n"
-                f"**Для участия нажмите кнопку ниже:** 👇"
-            )
-
-            bot_username = (await self.application.bot.get_me()).username
-            keyboard = [
-                [InlineKeyboardButton("🎯 Участвовать в конкурсе", url=f"https://t.me/{bot_username}?start=participate_{contest_id}")],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await self.application.bot.edit_message_text(
-                chat_id=self.channel_id,
-                message_id=contest[3],
-                text=message_text,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            
-        except Exception as e:
-            logger.error(f"Ошибка при обновлении сообщения конкурса {contest_id}: {e}")
-
-    def schedule_contest_end(self, contest_id: int, hours: int):
-        async def end_contest_auto():
-            await asyncio.sleep(hours * 3600)
-            await self.auto_end_contest(contest_id)
-        
-        asyncio.create_task(end_contest_auto())
-
-    async def auto_end_contest(self, contest_id: int):
-        contest = db.get_contest(contest_id)
-        if not contest or not contest[6]:
-            return
-
-        participants = db.get_participants(contest_id)
-        if participants:
-            winners = db.get_random_winners(contest_id, contest[7])
-            
-            winners_text = "🏆 **КОНКУРС ЗАВЕРШЕН!** 🏆\n\n"
-            winners_text += f"**Конкурс:** {contest[1]}\n\n"
-            winners_text += "**Победители:**\n"
-            
-            for i, winner in enumerate(winners, 1):
-                _, _, user_id, username, full_name, _ = winner
-                user_mention = f"@{username}" if username else full_name
-                winners_text += f"{i}. {user_mention}\n"
-            
-            winners_text += f"\n🎉 Поздравляем победителей!"
-        else:
-            winners_text = f"📭 Конкурс '{contest[1]}' завершен.\nУчастников не было."
-
-        try:
-            await self.application.bot.send_message(
-                chat_id=self.channel_id,
-                text=winners_text,
-                parse_mode='Markdown'
+            await bot.send_photo(
+                chat_id=PUBLIC_CHANNEL_ID,
+                photo=avatar_file_id,
+                caption=f"🏆 Команда #{team_number}: {team_name}"
             )
         except Exception as e:
-            logger.error(f"Ошибка при публикации результатов: {e}")
-
-        db.end_contest(contest_id)
-
-    async def show_active_contests(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not await self.is_admin(user):
-            await update.message.reply_text("❌ Нет прав администратора!")
-            return
-
-        contests = db.get_active_contests()
-        if not contests:
-            await update.message.reply_text("📭 Активных конкурсов нет.")
-            return
-
-        text = "📊 **Активные конкурсы:**\n\n"
-        
-        for contest in contests:
-            contest_id, name, description, channel_msg_id, created_at, end_time, is_active, winners_count = contest
-            time_left = datetime.datetime.fromisoformat(end_time) - datetime.datetime.now()
-            hours_left = max(0, int(time_left.total_seconds() // 3600))
-            minutes_left = max(0, int((time_left.total_seconds() % 3600) // 60))
-            
-            text += f"🎯 **{name}** (ID: {contest_id})\n"
-            text += f"⏰ Осталось: {hours_left}ч {minutes_left}м\n"
-            text += f"👥 Участников: {db.get_participants_count(contest_id)}\n"
-            text += f"🏆 Победителей: {winners_count}\n"
-            text += "────────────────────\n\n"
-
-        await update.message.reply_text(text, parse_mode='Markdown')
-
-    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-
-        data = query.data
-        user = query.from_user
-
-        if data.startswith("participate_"):
-            contest_id = int(data.split("_")[1])
-            await self.handle_participation_button(query, contest_id, user)
-            
-        elif data == "create_contest_menu":
-            await query.edit_message_text("📝 Используйте: /create Название|Описание|Часы|Победители")
-            
-        elif data == "active_contests":
-            await self.show_active_contests_callback(query)
-            
-        elif data.startswith("quick_"):
-            hours_map = {"1h": 1, "3h": 3, "6h": 6}
-            hours = hours_map[data.split("_")[1]]
-            await self.create_quick_contest(query, hours)
-            
-        elif data.startswith("end_"):
-            contest_id = int(data.split("_")[1])
-            await self.end_contest_handler(query, contest_id)
-
-    async def create_quick_contest(self, query, hours: int):
-        name = f"Быстрый конкурс ({hours}ч)"
-        description = f"Участвуйте в конкурсе и выигрывайте призы! Конкурс продлится {hours} часов."
-        winners_count = 1
-        
-        end_time = datetime.datetime.now() + datetime.timedelta(hours=hours)
-        channel_message_id = await self.create_contest_post(self.application, name, description, end_time, winners_count)
-        contest_id = db.add_contest(name, description, end_time, winners_count, channel_message_id)
-        await self.update_contest_message(contest_id)
-        self.schedule_contest_end(contest_id, hours)
-        
-        await query.edit_message_text(f"✅ Конкурс создан! ID: {contest_id}")
-
-    async def handle_participation_button(self, query, contest_id: int, user):
-        contest = db.get_contest(contest_id)
-        if not contest:
-            await query.edit_message_text("❌ Конкурс не найден!")
-            return
-
-        if not contest[6]:
-            await query.edit_message_text("❌ Этот конкурс уже завершен!")
-            return
-
-        if db.add_participant(contest_id, user.id, user.username, user.full_name):
-            participants_count = db.get_participants_count(contest_id)
-            await self.update_contest_message(contest_id)
-            
-            await query.edit_message_text(
-                f"✅ {user.first_name}, вы участвуете в конкурсе!\n\n"
-                f"🎯 **{contest[1]}**\n"
-                f"👥 Участников: {participants_count}"
-            )
-        else:
-            await query.edit_message_text(f"ℹ️ Вы уже участвуете в этом конкурсе!")
-
-    async def show_active_contests_callback(self, query):
-        contests = db.get_active_contests()
-        if not contests:
-            await query.edit_message_text("📭 Активных конкурсов нет.")
-            return
-
-        text = "📊 **Активные конкурсы:**\n\n"
-        keyboard = []
-        
-        for contest in contests:
-            contest_id, name, description, channel_msg_id, created_at, end_time, is_active, winners_count = contest
-            time_left = datetime.datetime.fromisoformat(end_time) - datetime.datetime.now()
-            hours_left = max(0, int(time_left.total_seconds() // 3600))
-            minutes_left = max(0, int((time_left.total_seconds() % 3600) // 60))
-            
-            text += f"🎯 **{name}** (ID: {contest_id})\n"
-            text += f"⏰ Осталось: {hours_left}ч {minutes_left}м\n"
-            text += f"👥 Участников: {db.get_participants_count(contest_id)}\n"
-            text += f"🏆 Победителей: {winners_count}\n"
-            text += "────────────────────\n\n"
-            
-            keyboard.append([InlineKeyboardButton(
-                f"Завершить '{name}'", 
-                callback_data=f"end_{contest_id}"
-            )])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
-    async def end_contest_handler(self, query, contest_id: int):
-        contest = db.get_contest(contest_id)
-        if not contest:
-            await query.edit_message_text("❌ Конкурс не найден!")
-            return
-
-        participants = db.get_participants(contest_id)
-        if participants:
-            winners = db.get_random_winners(contest_id, contest[7])
-            
-            winners_text = "🏆 **КОНКУРС ЗАВЕРШЕН!** 🏆\n\n"
-            winners_text += f"**Конкурс:** {contest[1]}\n\n"
-            winners_text += "**Победители:**\n"
-            
-            for i, winner in enumerate(winners, 1):
-                _, _, user_id, username, full_name, _ = winner
-                user_mention = f"@{username}" if username else full_name
-                winners_text += f"{i}. {user_mention}\n"
-        else:
-            winners_text = f"📭 Конкурс '{contest[1]}' завершен.\nУчастников не было."
-
+            logger.error(f"Ошибка канала: {e}")
+    
+    # Приватное сообщение админам
+    if ADMIN_GROUP_ID:
+        players_text = "\n".join([f"ID: {p['id']} | Ник: {p['nickname']}" for p in players])
+        admin_msg = (
+            f"🔒 Команда #{team_number}\n"
+            f"Название: {team_name}\n"
+            f"Капитан: @{message.from_user.username or 'N/A'}\n\n"
+            f"Состав:\n{players_text}"
+        )
         try:
-            await query.bot.send_message(
-                chat_id=self.channel_id,
-                text=winners_text,
-                parse_mode='Markdown'
-            )
+            await bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_msg)
         except Exception as e:
-            logger.error(f"Ошибка при публикации результатов: {e}")
+            logger.error(f"Ошибка админ-группы: {e}")
+    
+    # Ответ пользователю
+    team_counter += 1
+    remaining = MAX_TEAMS - team_counter
+    
+    await message.answer(
+        f"✅ Команда зарегистрирована!\n"
+        f"Ваш номер: #{team_number}\n"
+        f"Осталось мест: {remaining}"
+    )
+    
+    # Проверка заполнения всех мест
+    if team_counter >= MAX_TEAMS:
+        registration_active = False
+        if PUBLIC_CHANNEL_ID:
+            await bot.send_message(
+                chat_id=PUBLIC_CHANNEL_ID,
+                text="🎯 Регистрация завершена! Все места заняты."
+            )
+    
+    await state.clear()
 
-        db.end_contest(contest_id)
-        await query.edit_message_text(f"✅ Конкурс завершен! Участников: {len(participants)}")
+# Список команд
+@dp.message(Command("teams"))
+async def cmd_teams(message: Message):
+    if not teams_data:
+        await message.answer("📭 Нет зарегистрированных команд.")
+        return
+    
+    text = f"Команды ({team_counter}/{MAX_TEAMS}):\n\n"
+    for num, team in teams_data.items():
+        text += f"#{num}: {team['name']}\n"
+    
+    await message.answer(text)
 
-    async def is_admin(self, user):
-        return user.id in ADMIN_IDS
+# Помощь
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    help_text = (
+        "📋 Доступные команды:\n"
+        "/start - Начать\n"
+        "/register - Регистрация команды\n"
+        "/teams - Список команд\n"
+        "/help - Помощь"
+    )
+    
+    # Добавляем команды админа
+    if str(message.from_user.id) == ADMIN_ID:
+        help_text += (
+            "\n\n👑 Админ-команды:\n"
+            "/setlimit - Установить лимит команд\n"
+            "/closereg - Закрыть регистрацию\n"
+            "/status - Статус регистрации"
+        )
+    
+    await message.answer(help_text)
 
-    def run(self):
-        logger.info("🚀 Бот запускается на Railway...")
-        self.application.run_polling(drop_pending_updates=True)
+# Запуск
+async def main():
+    logger.info("Бот запущен")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    bot = ContestBot(BOT_TOKEN)
-    bot.run()
+    asyncio.run(main())

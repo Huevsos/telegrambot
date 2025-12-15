@@ -82,13 +82,13 @@ async def process_limit(message: Message, state: FSMContext):
             team_counter = 0
             teams_data = {}
             
-            await message.answer(f"✅ Лимит: {MAX_TEAMS} команд\nРегистрация открыта!")
+            await message.answer(f"✅ Лимит: {MAX_TEAMS} команд\nРегистрация открыта!"
             
             if PUBLIC_CHANNEL_ID:
                 try:
                     await bot.send_message(
                         chat_id=PUBLIC_CHANNEL_ID,
-                        text=f"🎮 Регистрация команд открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register. Создатель @cosinxx"
+                        text=f"🎮 Регистрация команд открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register\nРегистрация тут - @mawellsy_bot\nАвтор бота - @cosinxx"
                     )
                 except Exception as e:
                     logger.error(f"Ошибка: {e}")
@@ -177,16 +177,14 @@ async def process_team_avatar(message: Message, state: FSMContext):
     await message.answer(
         "✅ Аватарка принята!\n\n"
         "👥 Теперь введите данные игроков в формате:\n\n"
-        "<code>ID ЮЗЕРНЕЙМ НИК</code>\n\n"
+        "<code>ID @username Ник</code>\n\n"
         "Пример для 3 игроков:\n"
         "<code>123456789 @username1 PlayerOne\n"
         "987654321 @username2 PlayerTwo\n"
         "555555555 @username3 PlayerThree</code>\n\n"
-        "📌 Важные моменты:\n"
-        "• ID - только цифры\n"
-        "• Юзернейм - начинается с @\n"
-        "• Ник - любое имя\n"
-        "• Каждый игрок с новой строки"
+        "📌 Что будет показано:\n"
+        "• В канале: ники игроков\n"
+        "• Админам: все данные (ID, юзернеймы, ники)"
     )
 
 @dp.message(TeamRegistration.waiting_for_team_avatar)
@@ -234,7 +232,7 @@ async def process_players(message: Message, state: FSMContext):
     
     # Если есть ошибки, показываем их
     if errors:
-        error_text = "❌ Обнаружены ошибки:\n\n" + "\n".join(errors[:5])  # Показываем первые 5 ошибок
+        error_text = "❌ Обнаружены ошибки:\n\n" + "\n".join(errors[:5])
         if len(errors) > 5:
             error_text += f"\n\n... и еще {len(errors) - 5} ошибок"
         error_text += "\n\nИсправьте ошибки и отправьте данные снова:"
@@ -259,14 +257,29 @@ async def process_players(message: Message, state: FSMContext):
         'captain': f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
     }
     
-    # Отправляем в канал (публичная информация)
+    # ========== ОТПРАВКА В КАНАЛ (ПУБЛИЧНАЯ ИНФОРМАЦИЯ) ==========
     channel_success = False
     if PUBLIC_CHANNEL_ID:
         try:
+            # Формируем список ников игроков для канала
+            player_nicks = []
+            for i, player in enumerate(players, 1):
+                player_nicks.append(f"{i}. {player['nickname']}")
+            
+            players_text = "\n".join(player_nicks)
+            
+            # Сообщение для канала с никами игроков
+            channel_caption = (
+                f"🏆 Команда #{team_number}: <b>{team_name}</b>\n\n"
+                f"📋 Состав команды (ники):\n"
+                f"{players_text}\n\n"
+                f"👥 Всего игроков: {len(players)}"
+            )
+            
             await bot.send_photo(
                 chat_id=PUBLIC_CHANNEL_ID,
                 photo=avatar_file_id,
-                caption=f"🏆 Команда #{team_number}: {team_name}"
+                caption=channel_caption
             )
             channel_success = True
         except Exception as e:
@@ -278,14 +291,14 @@ async def process_players(message: Message, state: FSMContext):
             else:
                 await message.answer(f"❌ Ошибка отправки в канал: {error_msg}")
     
-    # Отправляем админам (приватная информация с юзернеймами)
+    # ========== ОТПРАВКА АДМИНАМ (ПРИВАТНАЯ ИНФОРМАЦИЯ) ==========
     admin_success = False
     if ADMIN_GROUP_ID:
         try:
-            # Формируем детальную информацию об игроках
+            # Формируем полную информацию об игроках для админов
             players_info = []
-            for p in players:
-                players_info.append(f"👤 ID: {p['id']} | Юзернейм: {p['username']} | Ник: {p['nickname']}")
+            for i, player in enumerate(players, 1):
+                players_info.append(f"{i}. ID: {player['id']} | Юзернейм: {player['username']} | Ник: {player['nickname']}")
             
             players_text = "\n".join(players_info)
             
@@ -293,8 +306,9 @@ async def process_players(message: Message, state: FSMContext):
                 f"🔒 ПРИВАТНЫЕ ДАННЫЕ КОМАНДЫ\n\n"
                 f"Команда #{team_number}: <b>{team_name}</b>\n"
                 f"Капитан: {teams_data[team_number]['captain']}\n\n"
-                f"📋 Полный состав:\n{players_text}\n\n"
-                f"Всего игроков: {len(players)}"
+                f"📋 Полный состав (все данные):\n"
+                f"{players_text}\n\n"
+                f"👥 Всего игроков: {len(players)}"
             )
             
             await bot.send_message(
@@ -319,14 +333,14 @@ async def process_players(message: Message, state: FSMContext):
     
     # Добавляем информацию о том, куда отправлены данные
     if channel_success:
-        report += "📢 Информация в канал: ✅ Отправлена\n"
+        report += "📢 В канал отправлено: название, аватарка и ники игроков ✅\n"
     else:
-        report += "📢 Информация в канал: ❌ Не отправлена\n"
+        report += "📢 В канал: ❌ Не отправлено\n"
     
     if admin_success:
-        report += "🔒 Данные игроков админам: ✅ Отправлены"
+        report += "🔒 Админам отправлено: все данные (ID, юзернеймы, ники) ✅"
     else:
-        report += "🔒 Данные игроков админам: ❌ Не отправлены"
+        report += "🔒 Админам: ❌ Не отправлены"
     
     # Показываем краткую информацию об игроках для подтверждения
     player_list = "\n".join([f"• {p['username']} ({p['nickname']})" for p in players])
@@ -388,6 +402,34 @@ async def cmd_teamdetails(message: Message):
         
         await message.answer(team_info)
 
+@dp.message(Command("showchannel"))
+async def cmd_showchannel(message: Message):
+    """Показать, что будет отправлено в канал (для теста)"""
+    if not teams_data:
+        await message.answer("📭 Нет зарегистрированных команд.")
+        return
+    
+    # Показываем пример для последней команды
+    last_num = max(teams_data.keys())
+    team = teams_data[last_num]
+    
+    # Формируем как для канала
+    player_nicks = []
+    for i, player in enumerate(team['players'], 1):
+        player_nicks.append(f"{i}. {player['nickname']}")
+    
+    players_text = "\n".join(player_nicks)
+    
+    example = (
+        f"📤 Пример сообщения для канала:\n\n"
+        f"🏆 Команда #{last_num}: <b>{team['name']}</b>\n\n"
+        f"📋 Состав команды (ники):\n"
+        f"{players_text}\n\n"
+        f"👥 Всего игроков: {len(team['players'])}"
+    )
+    
+    await message.answer(example)
+
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     help_text = (
@@ -398,20 +440,22 @@ async def cmd_help(message: Message):
         "/teams - Просмотр зарегистрированных команд\n"
         "/help - Справка\n\n"
         
-        "<b>Процесс регистрации команды:</b>\n"
-        "1. Название команды\n"
-        "2. Аватарка (логотип)\n"
-        "3. Данные игроков в формате:\n"
-        "   <code>ID @username Ник</code>\n\n"
+        "<b>📊 Что отправляется:</b>\n"
+        "• В канал: название, аватарка и НИКИ игроков\n"
+        "• Админам: ВСЕ данные (ID, юзернеймы, ники)\n\n"
+        
+        "<b>Формат данных игроков:</b>\n"
+        "<code>ID @username Ник</code>\n\n"
         "Пример:\n"
-        "<code>123456789 @player_one РусскийВоин\n"
-        "987654321 @player_two Снайпер\n"
-        "555555555 @player_tre Танк</code>\n\n"
+        "<code>123456789 @ivanov Иван\n"
+        "987654321 @petrov Петр\n"
+        "555555555 @sidorov Сидор</code>\n\n"
         
         "<b>Команды проверки:</b>\n"
         "/testchannel - Проверить канал\n"
         "/checkid - Показать текущие настройки\n"
-        "/getid - Получить ID чата"
+        "/getid - Получить ID чата\n"
+        "/showchannel - Пример для канала"
     )
     
     # Добавляем команды админа
@@ -447,9 +491,11 @@ async def main():
         # Отправляем админу сообщение о запуске
         await bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"🤖 Бот @{me.username} запущен!\n"
-                 f"Используйте /setlimit для начала регистрации.\n"
-                 f"Новый формат данных игроков: ID @username Ник"
+            text=f"🤖 Бот @{me.username} запущен!\n\n"
+                 f"<b>Новая система отправки:</b>\n"
+                 f"• В канал: ники игроков\n"
+                 f"• Админам: все данные\n\n"
+                 f"Используйте /setlimit для начала регистрации."
         )
     except Exception as e:
         logger.error(f"Ошибка при запуске: {e}")

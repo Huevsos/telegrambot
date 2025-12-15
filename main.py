@@ -88,7 +88,7 @@ async def process_limit(message: Message, state: FSMContext):
                 try:
                     await bot.send_message(
                         chat_id=PUBLIC_CHANNEL_ID,
-                        text=f"🎮 Регистрация команд открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register\nРегистрация тут - @mawellsy_bot\nАвтор бота - @cosinxx"
+                        text=f"🎮 Регистрация команд на турнир 2х2 открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register\nРегистрация тут - @mawellsy_bot\nАвтор бота - @cosinxx"
                     )
                 except Exception as e:
                     logger.error(f"Ошибка: {e}")

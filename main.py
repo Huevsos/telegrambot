@@ -82,7 +82,7 @@ async def process_limit(message: Message, state: FSMContext):
             team_counter = 0
             teams_data = {}
             
-            await message.answer(f"✅ Лимит: {MAX_TEAMS} команд\nРегистрация открыта!"
+            await message.answer(f"✅ Лимит: {MAX_TEAMS} команд\nРегистрация открыта!")
             
             if PUBLIC_CHANNEL_ID:
                 try:

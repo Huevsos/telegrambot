@@ -1,4 +1,3 @@
-import os
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -7,26 +6,21 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from dotenv import load_dotenv
 import asyncio
 
-# Загрузка переменных окружения
-load_dotenv()
+# ========== ВАШИ ДАННЫЕ ==========
+# Вставьте сюда свои данные:
 
-# Настройка логирования
+BOT_TOKEN = "8597427970:AAEU-5N1gWJe6Dow1AA6NPS82cGbHP0w5a4"  # Получить у @BotFather
+ADMIN_GROUP_ID = -1003408636061  # ID группы для админов (с минусом)
+PUBLIC_CHANNEL_ID = -5093355709  # ID канала для публики (с минусом)
+ADMIN_ID = 7433757951  # Ваш личный ID Telegram
+
+# ========== НАСТРОЙКИ ==========
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получение токена
-BOT_TOKEN = os.getenv("8597427970:AAEU-5N1gWJe6Dow1AA6NPS82cGbHP0w5a4")
-ADMIN_GROUP_ID = os.getenv("-1003408636061")
-PUBLIC_CHANNEL_ID = os.getenv("-5093355709")
-ADMIN_ID = os.getenv("7433757951")  # ID главного админа
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
-
-# Инициализация
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -34,7 +28,7 @@ dp = Dispatcher(storage=storage)
 # Хранение данных
 teams_data = {}
 team_counter = 0
-MAX_TEAMS = 0  # Будет установлено админом
+MAX_TEAMS = 0
 registration_active = False
 
 # Состояния
@@ -46,21 +40,40 @@ class TeamRegistration(StatesGroup):
 class AdminSetLimit(StatesGroup):
     waiting_for_limit = State()
 
-# ================== КОМАНДЫ ДЛЯ АДМИНА ==================
+# ========== КОМАНДА ДЛЯ ПОЛУЧЕНИЯ ID ==========
+@dp.message(Command("getid"))
+async def get_id_command(message: Message):
+    """Получить ID чата"""
+    chat_id = message.chat.id
+    chat_type = message.chat.type
+    chat_title = message.chat.title or "Личные сообщения"
+    
+    response = (
+        f"📊 Информация о чате:\n"
+        f"• Тип: {chat_type}\n"
+        f"• Название: {chat_title}\n"
+        f"• ID: `{chat_id}`\n\n"
+        f"🔹 Обычные группы: ID без минуса\n"
+        f"🔹 Супергруппы/каналы: ID начинается с `-100`"
+    )
+    
+    await message.answer(response, parse_mode="Markdown")
 
-# Установка лимита команд (только админ)
+# ========== АДМИН КОМАНДЫ ==========
+
 @dp.message(Command("setlimit"))
 async def cmd_setlimit(message: Message, state: FSMContext):
-    if str(message.from_user.id) != ADMIN_ID:
+    """Установить лимит команд (только админ)"""
+    if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Только администратор может устанавливать лимит.")
         return
     
     await state.set_state(AdminSetLimit.waiting_for_limit)
     await message.answer("Введите количество команд для регистрации (1-20):")
 
-# Обработка лимита от админа
 @dp.message(AdminSetLimit.waiting_for_limit)
 async def process_limit(message: Message, state: FSMContext):
+    """Обработка лимита от админа"""
     global MAX_TEAMS, registration_active, team_counter, teams_data
     
     try:
@@ -91,10 +104,10 @@ async def process_limit(message: Message, state: FSMContext):
     
     await state.clear()
 
-# Закрытие регистрации (админ)
 @dp.message(Command("closereg"))
 async def cmd_closereg(message: Message):
-    if str(message.from_user.id) != ADMIN_ID:
+    """Закрыть регистрацию (только админ)"""
+    if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Только администратор может закрывать регистрацию.")
         return
     
@@ -109,10 +122,10 @@ async def cmd_closereg(message: Message):
             text="⛔ Регистрация команд закрыта."
         )
 
-# Статус регистрации (админ)
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
-    if str(message.from_user.id) != ADMIN_ID:
+    """Показать статус регистрации (только админ)"""
+    if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Только администратор может просматривать статус.")
         return
     
@@ -131,11 +144,11 @@ async def cmd_status(message: Message):
     
     await message.answer(status_text)
 
-# ================== КОМАНДЫ ДЛЯ ВСЕХ ==================
+# ========== КОМАНДЫ ДЛЯ ВСЕХ ==========
 
-# Старт
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    """Начало работы"""
     if not registration_active:
         await message.answer("⏳ Регистрация команд пока не открыта. Ожидайте объявления.")
         return
@@ -146,9 +159,9 @@ async def cmd_start(message: Message):
         "Для регистрации команды используйте /register"
     )
 
-# Регистрация команды
 @dp.message(Command("register"))
 async def cmd_register(message: Message, state: FSMContext):
+    """Начать регистрацию команды"""
     # Проверка активности регистрации
     if not registration_active:
         await message.answer("❌ Регистрация закрыта.")
@@ -161,23 +174,23 @@ async def cmd_register(message: Message, state: FSMContext):
     
     # Только личные сообщения
     if message.chat.type != "private":
-        await message.answer("⚠️ Регистрация только в личных сообщениях.")
+        await message.answer("⚠️ Регистрация только в личных сообщениях с ботом.")
         return
     
     await state.set_state(TeamRegistration.waiting_for_team_name)
     await message.answer("📝 Введите название команды:")
 
-# Название команды
 @dp.message(TeamRegistration.waiting_for_team_name)
 async def process_team_name(message: Message, state: FSMContext):
+    """Получение названия команды"""
     team_name = message.text.strip()[:50]
     await state.update_data(team_name=team_name)
     await state.set_state(TeamRegistration.waiting_for_team_avatar)
     await message.answer(f"✅ Название: {team_name}\n\n📸 Отправьте аватарку команды (фото):")
 
-# Аватарка
 @dp.message(TeamRegistration.waiting_for_team_avatar, F.photo)
 async def process_team_avatar(message: Message, state: FSMContext):
+    """Получение аватарки команды"""
     photo = message.photo[-1]
     await state.update_data(avatar_file_id=photo.file_id)
     await state.set_state(TeamRegistration.waiting_for_players)
@@ -188,14 +201,14 @@ async def process_team_avatar(message: Message, state: FSMContext):
         "Пример:\n<code>123456789 PlayerOne\n987654321 PlayerTwo</code>"
     )
 
-# Неправильная аватарка
 @dp.message(TeamRegistration.waiting_for_team_avatar)
 async def wrong_avatar(message: Message):
+    """Ошибка: не фото"""
     await message.answer("❌ Отправьте фото (аватарку команды).")
 
-# Данные игроков
 @dp.message(TeamRegistration.waiting_for_players)
 async def process_players(message: Message, state: FSMContext):
+    """Получение данных игроков и завершение регистрации"""
     global team_counter
     
     # Проверяем, не заняты ли уже все места
@@ -206,7 +219,7 @@ async def process_players(message: Message, state: FSMContext):
     
     # Парсим игроков
     players = []
-    for line in message.text.strip().split('\n')[:10]:
+    for line in message.text.strip().split('\n')[:10]:  # максимум 10 игроков
         parts = line.strip().split()
         if len(parts) >= 2 and parts[0].isdigit():
             players.append({
@@ -229,10 +242,10 @@ async def process_players(message: Message, state: FSMContext):
         'name': team_name,
         'avatar': avatar_file_id,
         'players': players,
-        'captain': message.from_user.username or "N/A"
+        'captain': f"@{message.from_user.username}" if message.from_user.username else "Без username"
     }
     
-    # Публичное сообщение в канал
+    # Публичное сообщение в канал (только название и аватарка)
     if PUBLIC_CHANNEL_ID:
         try:
             await bot.send_photo(
@@ -241,35 +254,43 @@ async def process_players(message: Message, state: FSMContext):
                 caption=f"🏆 Команда #{team_number}: {team_name}"
             )
         except Exception as e:
-            logger.error(f"Ошибка канала: {e}")
+            logger.error(f"Ошибка отправки в канал: {e}")
     
-    # Приватное сообщение админам
+    # Приватное сообщение админам (все данные)
     if ADMIN_GROUP_ID:
         players_text = "\n".join([f"ID: {p['id']} | Ник: {p['nickname']}" for p in players])
         admin_msg = (
-            f"🔒 Команда #{team_number}\n"
-            f"Название: {team_name}\n"
-            f"Капитан: @{message.from_user.username or 'N/A'}\n\n"
-            f"Состав:\n{players_text}"
+            f"🔒 ПРИВАТНЫЕ ДАННЫЕ\n\n"
+            f"Команда #{team_number}: {team_name}\n"
+            f"Капитан: {teams_data[team_number]['captain']}\n\n"
+            f"📋 Состав команды:\n{players_text}\n\n"
+            f"Всего игроков: {len(players)}"
         )
         try:
-            await bot.send_message(chat_id=ADMIN_GROUP_ID, text=admin_msg)
+            await bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=admin_msg
+            )
         except Exception as e:
-            logger.error(f"Ошибка админ-группы: {e}")
+            logger.error(f"Ошибка отправки админам: {e}")
     
     # Ответ пользователю
     team_counter += 1
     remaining = MAX_TEAMS - team_counter
     
     await message.answer(
-        f"✅ Команда зарегистрирована!\n"
-        f"Ваш номер: #{team_number}\n"
+        f"✅ Команда {team_name} успешно зарегистрирована!\n\n"
+        f"Номер команды: #{team_number}\n"
+        f"Количество игроков: {len(players)}\n"
         f"Осталось мест: {remaining}"
     )
     
     # Проверка заполнения всех мест
     if team_counter >= MAX_TEAMS:
+        global registration_active
         registration_active = False
+        
+        # Уведомление в канал о завершении регистрации
         if PUBLIC_CHANNEL_ID:
             await bot.send_message(
                 chat_id=PUBLIC_CHANNEL_ID,
@@ -278,44 +299,71 @@ async def process_players(message: Message, state: FSMContext):
     
     await state.clear()
 
-# Список команд
 @dp.message(Command("teams"))
 async def cmd_teams(message: Message):
+    """Показать список зарегистрированных команд"""
     if not teams_data:
         await message.answer("📭 Нет зарегистрированных команд.")
         return
     
-    text = f"Команды ({team_counter}/{MAX_TEAMS}):\n\n"
+    text = f"📋 Зарегистрированные команды ({team_counter}/{MAX_TEAMS}):\n\n"
     for num, team in teams_data.items():
-        text += f"#{num}: {team['name']}\n"
+        text += f"#{num}: {team['name']} ({len(team['players'])} игроков)\n"
     
     await message.answer(text)
 
-# Помощь
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
+    """Показать справку"""
     help_text = (
-        "📋 Доступные команды:\n"
-        "/start - Начать\n"
-        "/register - Регистрация команды\n"
-        "/teams - Список команд\n"
-        "/help - Помощь"
+        "🤖 <b>Бот регистрации команд</b>\n\n"
+        "Доступные команды:\n"
+        "/start - Начало работы\n"
+        "/register - Регистрация новой команды\n"
+        "/teams - Просмотр зарегистрированных команд\n"
+        "/help - Справка\n"
+        "/getid - Получить ID чата (для настройки)\n\n"
     )
     
     # Добавляем команды админа
-    if str(message.from_user.id) == ADMIN_ID:
+    if message.from_user.id == ADMIN_ID:
         help_text += (
-            "\n\n👑 Админ-команды:\n"
+            "<b>👑 Команды администратора:</b>\n"
             "/setlimit - Установить лимит команд\n"
             "/closereg - Закрыть регистрацию\n"
-            "/status - Статус регистрации"
+            "/status - Показать статус регистрации\n\n"
         )
+    
+    help_text += (
+        "<b>Процесс регистрации:</b>\n"
+        "1. Название команды\n"
+        "2. Аватарка (логотип)\n"
+        "3. Данные игроков (ID и никнеймы)"
+    )
     
     await message.answer(help_text)
 
-# Запуск
+# ========== ЗАПУСК БОТА ==========
+
 async def main():
-    logger.info("Бот запущен")
+    """Запуск бота"""
+    logger.info("=" * 50)
+    logger.info("Бот запущен!")
+    logger.info(f"ID администратора: {ADMIN_ID}")
+    logger.info(f"ID канала: {PUBLIC_CHANNEL_ID}")
+    logger.info(f"ID группы админов: {ADMIN_GROUP_ID}")
+    logger.info("=" * 50)
+    
+    # Отправляем сообщение админу о запуске
+    try:
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text="🤖 Бот запущен!\n\n"
+                 "Для начала регистрации используйте команду /setlimit"
+        )
+    except:
+        logger.warning("Не удалось отправить сообщение администратору")
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ BOT_TOKEN = "7996038616:AAFZeaNCCYzPnubzDd6zMOLmOP_VrWdGiJM"
 ADMIN_GROUP_ID = -5037361883  # Группа для админов
 PUBLIC_CHANNEL_ID = -1003408636061  # Канал для публикации
 # ВАШ ЛИЧНЫЙ ID и ID ВТОРОГО АДМИНА
-ADMIN_IDS = [7433757951, 6925772057]  # ⚠️ Замените 1234567890 на ID второго админа
+ADMIN_IDS = [8272509909, 6925772057]  # ⚠️ Замените 1234567890 на ID второго админа
 
 # ========== НАСТРОЙКИ ==========
 logging.basicConfig(level=logging.INFO)

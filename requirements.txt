@@ -1,1 +1,2 @@
-python-telegram-bot==20.7
+aiogram==3.11.2
+python-dotenv==1.0.0

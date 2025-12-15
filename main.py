@@ -13,7 +13,8 @@ import asyncio
 BOT_TOKEN = "8597427970:AAEU-5N1gWJe6Dow1AA6NPS82cGbHP0w5a4"
 ADMIN_GROUP_ID = -1003602134338  # Группа для админов
 PUBLIC_CHANNEL_ID = -1003408636061  # Канал для публикации
-ADMIN_ID = 7433757951,6925772057  # Ваш личный ID
+ADMIN_ID = 7433757951  # Ваш личный ID
+ADMIN_ID = 6925772057  # Ваш личный ID
 
 # ========== НАСТРОЙКИ ==========
 logging.basicConfig(level=logging.INFO)

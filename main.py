@@ -8,12 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 import asyncio
+import random
+from datetime import datetime
 
 # ========== ВАШИ ДАННЫЕ ==========
-BOT_TOKEN = "8597427970:AAEU-5N1gWJe6Dow1AA6NPS82cGbHP0w5a4"
-ADMIN_GROUP_ID = -1003602134338  # Группа для админов
+BOT_TOKEN = "7996038616:AAFZeaNCCYzPnubzDd6zMOLmOP_VrWdGiJM"
+ADMIN_GROUP_ID = -5037361883  # Группа для админов
 PUBLIC_CHANNEL_ID = -1003408636061  # Канал для публикации
-ADMIN_ID = 7433757951  # Ваш личный ID
+ADMIN_IDS = [7433757951, 6925772057]   # Ваш личный ID
 
 # ========== НАСТРОЙКИ ==========
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +32,7 @@ teams_data = {}
 team_counter = 0
 MAX_TEAMS = 0
 registration_active = False
+tournament_pairs = []  # Хранит пары для турнира
 
 # Состояния
 class TeamRegistration(StatesGroup):
@@ -39,6 +42,93 @@ class TeamRegistration(StatesGroup):
 
 class AdminSetLimit(StatesGroup):
     waiting_for_limit = State()
+
+# ========== ФУНКЦИЯ ДЛЯ СОЗДАНИЯ ПАР ТУРНИРА ==========
+def create_tournament_pairs():
+    """Создать случайные пары для турнира"""
+    global tournament_pairs
+    tournament_pairs = []
+    
+    if len(teams_data) < 2:
+        return []
+    
+    # Получаем список номеров команд
+    team_numbers = list(teams_data.keys())
+    
+    # Перемешиваем команды
+    random.shuffle(team_numbers)
+    
+    # Создаем пары
+    pairs = []
+    for i in range(0, len(team_numbers), 2):
+        if i + 1 < len(team_numbers):
+            pairs.append((team_numbers[i], team_numbers[i + 1]))
+        else:
+            # Если нечетное количество команд, одна команда проходит автоматически
+            pairs.append((team_numbers[i], None))
+    
+    tournament_pairs = pairs
+    return pairs
+
+# ========== ФУНКЦИЯ ДЛЯ ОТПРАВКИ РАСПРЕДЕЛЕНИЯ АДМИНАМ ==========
+async def send_tournament_distribution_to_admins():
+    """Отправить распределение турнира админам"""
+    if not tournament_pairs:
+        return False
+    
+    try:
+        distribution_text = "🎮 РАСПРЕДЕЛЕНИЕ КОМАНД ДЛЯ ТУРНИРА\n\n"
+        distribution_text += f"Дата создания: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+        distribution_text += f"Всего команд: {len(teams_data)}\n"
+        distribution_text += f"Количество матчей: {len(tournament_pairs)}\n\n"
+        
+        for match_num, (team1_num, team2_num) in enumerate(tournament_pairs, 1):
+            distribution_text += f"⚔️ МАТЧ #{match_num}:\n"
+            
+            team1 = teams_data[team1_num]
+            distribution_text += f"• Команда #{team1_num}: {team1['name']}\n"
+            distribution_text += f"  Капитан: {team1['captain']}\n"
+            
+            if team2_num:
+                team2 = teams_data[team2_num]
+                distribution_text += f"• Команда #{team2_num}: {team2['name']}\n"
+                distribution_text += f"  Капитан: {team2['captain']}\n"
+            else:
+                distribution_text += f"• 🎉 Команда #{team1_num} проходит автоматически (нечетное количество)\n"
+            
+            # Добавляем контактные данные капитанов
+            distribution_text += f"  📞 Контакты капитанов:\n"
+            if team1['captain'].startswith('@'):
+                distribution_text += f"  - {team1['captain']}\n"
+            
+            if team2_num and team2['captain'].startswith('@'):
+                distribution_text += f"  - {team2['captain']}\n"
+            
+            distribution_text += "\n"
+        
+        distribution_text += "📋 Правила:\n"
+        distribution_text += "1. Капитаны связываются для согласования времени\n"
+        distribution_text += "2. Результаты отправляются организаторам\n"
+        distribution_text += "3. Следующий этап будет объявлен после всех матчей\n"
+        
+        # Отправляем админам
+        await bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=distribution_text
+        )
+        
+        # Также отправляем лично админу
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"✅ Распределение турнира отправлено в группу админов!\n"
+                 f"Всего матчей: {len(tournament_pairs)}"
+        )
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки распределения: {e}")
+        return False
 
 # ========== ФУНКЦИЯ ДЛЯ ОТПРАВКИ ПОЛНОГО СПИСКА В КАНАЛ ==========
 async def send_all_teams_to_channel():
@@ -67,40 +157,10 @@ async def send_all_teams_to_channel():
             text=summary
         )
         
-        # Также отправляем админу для подтверждения
-        await bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"✅ Полный список {len(teams_data)} команд отправлен в канал!"
-        )
-        
         return True
         
     except Exception as e:
         logger.error(f"Ошибка отправки полного списка: {e}")
-        
-        # Если не получилось отправить в канал, отправляем админу
-        try:
-            summary = "📊 ПОЛНЫЙ СПИСОК ВСЕХ КОМАНД:\n\n"
-            
-            for team_num, team in teams_data.items():
-                summary += f"🏆 КОМАНДА #{team_num}: {team['name']}\n"
-                
-                summary += "📋 Игроки:\n"
-                for i, player in enumerate(team['players'], 1):
-                    summary += f"{i}. ID: {player['id']} | Юзернейм: {player['username']} | Ник: {player['nickname']}\n"
-                
-                summary += f"👥 Всего игроков: {len(team['players'])}\n"
-                summary += "─" * 40 + "\n\n"
-            
-            summary += f"📈 ИТОГО: {len(teams_data)} команд, {sum(len(t['players']) for t in teams_data.values())} игроков"
-            
-            await bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"❌ Не удалось отправить в канал. Вот полный список:\n\n{summary}"
-            )
-        except Exception as e2:
-            logger.error(f"Ошибка отправки админу: {e2}")
-        
         return False
 
 # ========== КОМАНДЫ ДЛЯ ПРОВЕРКИ ==========
@@ -132,12 +192,45 @@ async def cmd_getfull(message: Message):
         return
     
     await send_all_teams_to_channel()
-    await message.answer("✅ Команда на отправку полного списка выполнена!")
+    await message.answer("✅ Полный список команд отправлен в канал!")
+
+@dp.message(Command("makepairs"))
+async def cmd_makepairs(message: Message):
+    """Создать пары для турнира (ручная команда)"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if len(teams_data) < 2:
+        await message.answer("❌ Нужно минимум 2 команды для создания пар.")
+        return
+    
+    # Создаем пары
+    pairs = create_tournament_pairs()
+    
+    if not pairs:
+        await message.answer("❌ Не удалось создать пары.")
+        return
+    
+    # Показываем результат админу
+    result_text = "🎲 Созданы пары для турнира:\n\n"
+    for match_num, (team1_num, team2_num) in enumerate(pairs, 1):
+        team1 = teams_data[team1_num]
+        if team2_num:
+            team2 = teams_data[team2_num]
+            result_text += f"Матч #{match_num}: {team1['name']} 🆚 {team2['name']}\n"
+        else:
+            result_text += f"Матч #{match_num}: {team1['name']} 🎉 (автоматический проход)\n"
+    
+    await message.answer(result_text)
+    
+    # Отправляем распределение админам
+    await send_tournament_distribution_to_admins()
+    await message.answer("✅ Распределение отправлено админам!")
 
 # ========== АДМИН КОМАНДЫ ==========
 @dp.message(Command("setlimit"))
 async def cmd_setlimit(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id != ADMIN_IDS:
         await message.answer("❌ Только администратор.")
         return
     
@@ -146,7 +239,7 @@ async def cmd_setlimit(message: Message, state: FSMContext):
 
 @dp.message(AdminSetLimit.waiting_for_limit)
 async def process_limit(message: Message, state: FSMContext):
-    global MAX_TEAMS, registration_active, team_counter, teams_data
+    global MAX_TEAMS, registration_active, team_counter, teams_data, tournament_pairs
     
     try:
         limit = int(message.text.strip())
@@ -155,6 +248,7 @@ async def process_limit(message: Message, state: FSMContext):
             registration_active = True
             team_counter = 0
             teams_data = {}
+            tournament_pairs = []
             
             await message.answer(f"✅ Лимит: {MAX_TEAMS} команд\nРегистрация открыта!")
             
@@ -162,7 +256,7 @@ async def process_limit(message: Message, state: FSMContext):
                 try:
                     await bot.send_message(
                         chat_id=PUBLIC_CHANNEL_ID,
-                        text=f"🎮 Регистрация команд на турнир 2х2 открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register\n Регистрация - @mawellsy_bot\n <b>Автор бота - @cosinxx</b>"
+                        text=f"🎮 Регистрация команд открыта!\nМаксимум: {MAX_TEAMS} команд\nИспользуйте /register"
                     )
                 except Exception as e:
                     logger.error(f"Ошибка: {e}")
@@ -196,7 +290,7 @@ async def cmd_status(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
     
-    status_text = f"📊 Статус:\n• Лимит: {MAX_TEAMS}\n• Зарегистрировано: {team_counter}\n• Свободно: {MAX_TEAMS - team_counter}\n• Статус: {'✅ Открыта' if registration_active else '❌ Закрыта'}\n"
+    status_text = f"📊 Статус:\n• Лимит: {MAX_TEAMS}\n• Зарегистрировано: {team_counter}\n• Свободно: {MAX_TEAMS - team_counter}\n• Статус: {'✅ Открыта' if registration_active else '❌ Закрыта'}\n• Пар создано: {len(tournament_pairs)}\n"
     
     if teams_data:
         status_text += "\nКоманды:\n"
@@ -256,7 +350,7 @@ async def wrong_avatar(message: Message):
 
 @dp.message(TeamRegistration.waiting_for_players)
 async def process_players(message: Message, state: FSMContext):
-    global team_counter, registration_active
+    global team_counter, registration_active, tournament_pairs
     
     if team_counter >= MAX_TEAMS:
         await message.answer("❌ Все места уже заняты!")
@@ -424,14 +518,60 @@ async def process_players(message: Message, state: FSMContext):
                 # Отправляем полный список всех команд в канал
                 await send_all_teams_to_channel()
                 
+                # Ждем еще 3 секунды
+                await asyncio.sleep(3)
+                
+                # Создаем пары для турнира
+                pairs = create_tournament_pairs()
+                
+                if pairs:
+                    # Отправляем распределение админам
+                    await send_tournament_distribution_to_admins()
+                    
+                    # Уведомляем в канал о создании пар
+                    await bot.send_message(
+                        chat_id=PUBLIC_CHANNEL_ID,
+                        text="🎲 Пары для турнира созданы и отправлены организаторам!\n\n"
+                             "⚔️ Ближайшие матчи будут объявлены в ближайшее время."
+                    )
+                
             except Exception as e:
                 logger.error(f"Ошибка при завершении регистрации: {e}")
                 await bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"❌ Ошибка при отправке полного списка в канал: {e}"
+                    text=f"❌ Ошибка при завершении регистрации: {e}"
                 )
     
     await state.clear()
+
+@dp.message(Command("showpairs"))
+async def cmd_showpairs(message: Message):
+    """Показать созданные пары"""
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Только администратор может просматривать пары.")
+        return
+    
+    if not tournament_pairs:
+        await message.answer("📭 Пары еще не созданы.")
+        return
+    
+    pairs_text = "🎮 СОЗДАННЫЕ ПАРЫ ДЛЯ ТУРНИРА:\n\n"
+    
+    for match_num, (team1_num, team2_num) in enumerate(tournament_pairs, 1):
+        team1 = teams_data[team1_num]
+        pairs_text += f"⚔️ МАТЧ #{match_num}:\n"
+        pairs_text += f"• Команда #{team1_num}: {team1['name']}\n"
+        
+        if team2_num:
+            team2 = teams_data[team2_num]
+            pairs_text += f"• Команда #{team2_num}: {team2['name']}\n"
+            pairs_text += f"  🆚 {team1['name']} vs {team2['name']}\n"
+        else:
+            pairs_text += f"• 🎉 Команда #{team1_num} проходит автоматически\n"
+        
+        pairs_text += "\n"
+    
+    await message.answer(pairs_text)
 
 @dp.message(Command("teams"))
 async def cmd_teams(message: Message):
@@ -473,7 +613,9 @@ async def cmd_help(message: Message):
             "/setlimit - Установить лимит команд\n"
             "/closereg - Закрыть регистрацию\n"
             "/status - Показать статус\n"
-            "/getfull - Отправить полный список команд в канал"
+            "/getfull - Отправить полный список в канал\n"
+            "/makepairs - Создать пары для турнира\n"
+            "/showpairs - Показать созданные пары"
         )
     
     await message.answer(help_text)
@@ -488,7 +630,7 @@ async def handle_other(message: Message):
 
 async def main():
     logger.info("=" * 50)
-    logger.info("Бот регистрации команд запущен!")
+    logger.info("Бот регистрации команд с турниром запущен!")
     logger.info(f"Бот токен: {BOT_TOKEN[:10]}...")
     logger.info(f"Канал: {PUBLIC_CHANNEL_ID}")
     logger.info(f"Группа админов: {ADMIN_GROUP_ID}")
@@ -507,11 +649,14 @@ async def main():
                  f"<b>Настройки:</b>\n"
                  f"• Канал: {PUBLIC_CHANNEL_ID}\n"
                  f"• Группа админов: {ADMIN_GROUP_ID}\n\n"
-                 f"<b>Функции:</b>\n"
+                 f"<b>НОВЫЕ ФУНКЦИИ:</b>\n"
                  f"• Собирает команды\n"
                  f"• Отправляет в канал ники игроков\n"
                  f"• Отправляет админам полные данные\n"
-                 f"• При заполнении всех мест отправляет полный список в канал\n\n"
+                 f"• При заполнении всех мест:\n"
+                 f"  1. Отправляет полный список в канал\n"
+                 f"  2. Создает случайные пары для турнира\n"
+                 f"  3. Отправляет распределение админам\n\n"
                  f"Используйте /setlimit для начала регистрации."
         )
     except Exception as e:
